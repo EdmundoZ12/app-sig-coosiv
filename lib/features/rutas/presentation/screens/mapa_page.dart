@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui';
 import 'package:app_coosiv/config/helpers/getRoutesPoint.dart';
 import 'package:app_coosiv/config/helpers/postCorte.dart';
 import 'package:app_coosiv/config/interfaces/datamodel.dart';
@@ -8,6 +9,7 @@ import 'package:app_coosiv/features/rutas/presentation/utils/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'dart:ui' as ui;
 
 class MapScreen extends StatefulWidget {
   static const String routename = 'MapScreen';
@@ -61,91 +63,138 @@ class _MapScreenState extends State<MapScreen> {
     startIcon = BitmapDescriptor.fromBytes(startIconBytes);
   }
 
-  Future<void> mostrarRutas(DataModel route) async {
-    if (route.serviceAccounts.isNotEmpty) {
-      // El primer punto del polyline es el startingPoint
-      LatLng startingPoint =
-          LatLng(route.startingPoint.latitude, route.startingPoint.longitude);
-      posiciones.add(startingPoint);
+Future<Uint8List> crearMarcadorConNumero(int numero) async {
+  const int marcadorTamao = 120;
+  final PictureRecorder pictureRecorder = PictureRecorder();
+  final Canvas canvas = Canvas(pictureRecorder);
+  final Paint paint = Paint()..color = Colors.red;
+  final Paint bordePaint = Paint()
+    ..color = Colors.white
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 4;
+
+  // Dibuja el círculo
+  canvas.drawCircle(
+    Offset(marcadorTamao / 2, marcadorTamao / 2),
+    marcadorTamao / 2,
+    paint,
+  );
+
+  // Dibuja el borde blanco
+  canvas.drawCircle(
+    Offset(marcadorTamao / 2, marcadorTamao / 2),
+    marcadorTamao / 2,
+    bordePaint,
+  );
+
+  // Dibuja el número en el centro
+  final TextPainter textPainter = TextPainter(
+    text: TextSpan(
+      text: numero.toString(),
+      style: TextStyle(
+        fontSize: marcadorTamao / 2.5,
+        fontWeight: FontWeight.bold,
+        color: Colors.white,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  );
+  textPainter.layout();
+  textPainter.paint(
+    canvas,
+    Offset(
+      (marcadorTamao - textPainter.width) / 2,
+      (marcadorTamao - textPainter.height) / 2,
+    ),
+  );
+
+  final img = await pictureRecorder.endRecording().toImage(marcadorTamao, marcadorTamao);
+  final ByteData? data = await img.toByteData(format: ImageByteFormat.png);
+  return data!.buffer.asUint8List();
+}
+
+Future<void> mostrarRutas(DataModel route) async {
+  if (route.serviceAccounts.isNotEmpty) {
+    LatLng startingPoint = LatLng(route.startingPoint.latitude, route.startingPoint.longitude);
+    posiciones.add(startingPoint);
+
+    // Primer marcador con imagen personalizada
+    markers.add(
+      Marker(
+        markerId: MarkerId(startingPoint.toString()),
+        position: startingPoint,
+        icon: startIcon,
+        infoWindow: InfoWindow(
+          title: 'Punto Inicial',
+          snippet: 'COOSIV LTDA',
+        ),
+      ),
+    );
+
+    int index = 1; // Inicia la enumeración
+    for (var account in route.serviceAccounts) {
+      LatLng accountLocation = LatLng(account.address.latitude, account.address.longitude);
+      posiciones.add(accountLocation);
+
+      // Generar marcador numerado
+      Uint8List marcadorNumerado = await crearMarcadorConNumero(index);
 
       markers.add(
         Marker(
-          markerId: MarkerId(startingPoint.toString()),
-          position: startingPoint,
-          icon: startIcon,
+          markerId: MarkerId(accountLocation.toString()),
+          position: accountLocation,
+          icon: BitmapDescriptor.fromBytes(marcadorNumerado),
+          onTap: () {
+            mostrarDialogo(
+              context,
+              account.name,
+              account.accountNumber,
+              'N° cuenta: ${account.accountNumber}\nCategoría: ${account.category}\nNotas: ${account.notes}',
+              MarkerId(accountLocation.toString()),
+            );
+          },
           infoWindow: InfoWindow(
-            title: 'Punto Inicial',
-            snippet: 'COOSIV LTDA',
+            title: account.name,
+            snippet: 'N° cuenta: ${account.accountNumber}, Categoría: ${account.category}\nNotas: ${account.notes}',
           ),
         ),
       );
 
-      for (var account in route.serviceAccounts) {
-        LatLng accountLocation =
-            LatLng(account.address.latitude, account.address.longitude);
-        posiciones.add(accountLocation);
-
-        markers.add(
-          Marker(
-            markerId: MarkerId(accountLocation.toString()),
-            position: accountLocation,
-            icon: icon,
-            onTap: () {
-              mostrarDialogo(
-                context,
-                account.name,
-                account.accountNumber,
-                'N° cuenta: ${account.accountNumber}\nCategoría: ${account.category}\nNotas: ${account.notes}',
-                MarkerId(accountLocation
-                    .toString()), // Envia el MarkerId del marcador actual
-              );
-            },
-            infoWindow: InfoWindow(
-              title: account.name,
-              snippet:
-                  'N° cuenta: ${account.accountNumber}, Categoría: ${account.category}\nNotas: ${account.notes}',
-            ),
-          ),
-        );
-
-        // Obtén los puntos de la ruta entre los marcadores
-        List<LatLng> routePoints =
-            await getRoutePoints(startingPoint, accountLocation);
-        if (routePoints.isNotEmpty) {
-          polylines.add(
-            Polyline(
-              polylineId: PolylineId(
-                  '${startingPoint.toString()}-${accountLocation.toString()}'),
-              points: routePoints,
-              width: 4,
-              color: Colors.blue,
-            ),
-          );
-        }
-
-        startingPoint =
-            accountLocation; // Actualiza el punto inicial para la siguiente ruta
-      }
-
-      // Cierra el circuito conectando el último punto con el inicial
-      LatLng lastPoint = posiciones.last;
-      List<LatLng> closingRoute =
-          await getRoutePoints(lastPoint, posiciones.first);
-      if (closingRoute.isNotEmpty) {
+      // Ruta entre los puntos
+      List<LatLng> routePoints = await getRoutePoints(startingPoint, accountLocation);
+      if (routePoints.isNotEmpty) {
         polylines.add(
           Polyline(
-            polylineId: PolylineId(
-                'closing-${lastPoint.toString()}-${posiciones.first.toString()}'),
-            points: closingRoute,
+            polylineId: PolylineId('${startingPoint.toString()}-${accountLocation.toString()}'),
+            points: routePoints,
             width: 4,
-            color: Colors.red,
+            color: Colors.blue,
           ),
         );
       }
 
-      setState(() {});
+      startingPoint = accountLocation; // Actualiza para la siguiente iteración
+      index++; // Incrementa el número del marcador
     }
+
+    // Cierra el circuito conectando el último punto con el inicial
+    LatLng lastPoint = posiciones.last;
+    List<LatLng> closingRoute = await getRoutePoints(lastPoint, posiciones.first);
+    if (closingRoute.isNotEmpty) {
+      polylines.add(
+        Polyline(
+          polylineId: PolylineId('closing-${lastPoint.toString()}-${posiciones.first.toString()}'),
+          points: closingRoute,
+          width: 4,
+          color: Colors.red,
+        ),
+      );
+    }
+
+    setState(() {});
   }
+}
+
 
   void mostrarDialogo(BuildContext context, String titulo, int accountId,
       String contenido, MarkerId markerId) {
