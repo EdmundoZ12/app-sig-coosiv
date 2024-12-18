@@ -37,6 +37,13 @@ android {
             signingConfig = signingConfigs.debug
         }
     }
+
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def newApkName = "AppCoosiv-${variant.buildType.name}-${defaultConfig.versionName}.apk"
+            output.outputFileName = newApkName
+        }
+    }
 }
 
 flutter {

@@ -7,4 +7,6 @@ class Environment {
 
   static String apiUrl =
       dotenv.env['API_URL'] ?? 'No esta configurado el API_URL';
+  static String apiKey =
+      dotenv.env['API_KEY'] ?? 'No esta configurado el API_KEY';
 }
